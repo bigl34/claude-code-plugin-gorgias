@@ -1,0 +1,5 @@
+{
+  "name": "gorgias-support-manager",
+  "version": "1.1.11",
+  "description": "Dedicated agent for Gorgias helpdesk operations with isolated API access"
+}

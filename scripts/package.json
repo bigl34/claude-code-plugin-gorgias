@@ -1,0 +1,20 @@
+{
+  "name": "gorgias-support-scripts",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "cli": "tsx cli.ts",
+    "build": "tsc",
+    "start": "node dist/cli.js"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2",
+    "@local/plugin-cache": "github:YOUR_GITHUB_USER/claude-code-plugin-cache",
+    "@local/cli-utils": "github:YOUR_GITHUB_USER/claude-code-plugin-shared"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0"
+  }
+}
