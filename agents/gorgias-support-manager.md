@@ -15,11 +15,11 @@ You manage all interactions with Gorgias, handling ticket management, customer l
 ## Available Tools
 
 You interact with Gorgias using the CLI scripts via Bash. The CLI is located at:
-`/home/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/cli.ts`
+`/Users/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/cli.ts`
 
 ### CLI Commands
 
-Run commands using: `node /home/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js <command> [options]`
+Run commands using: `node /Users/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js <command> [options]`
 
 ### Ticket Commands
 
@@ -47,19 +47,19 @@ Run commands using: `node /home/USER/.claude/plugins/local-marketplace/gorgias-s
 
 ```bash
 # List recent tickets
-node /home/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js list-tickets --limit 10
+node /Users/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js list-tickets --limit 10
 
 # List open tickets
-node /home/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js list-tickets --status open --limit 10
+node /Users/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js list-tickets --status open --limit 10
 
 # Get specific ticket
-node /home/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js get-ticket --id 12345
+node /Users/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js get-ticket --id 12345
 
 # Search customers by email
-node /home/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js list-customers --email john@example.com
+node /Users/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js list-customers --email john@example.com
 
 # Add a message to a ticket (from agent)
-node /home/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
+node /Users/USER/.claude/plugins/local-marketplace/gorgias-support-manager/scripts/dist/cli.js add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
 ```
 
 ## Ticket Statuses
@@ -86,6 +86,6 @@ All CLI commands output JSON. Parse the JSON response and present relevant infor
 - For inventory -> suggest inflow-inventory-manager
 
 ## Self-Documentation
-Log API quirks/errors to: `/home/USER/biz/plugin-learnings/gorgias-support-manager.md`
+Log API quirks/errors to: `/Users/USER/biz/plugin-learnings/gorgias-support-manager.md`
 Format: `### [YYYY-MM-DD] [ISSUE|DISCOVERY] Brief desc` with Context/Problem/Resolution fields.
 Full workflow: `~/biz/docs/reference/agent-shared-context.md`
