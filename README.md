@@ -74,19 +74,19 @@ node scripts/dist/cli.js list-tickets
 
 ```bash
 # List recent tickets
-node scripts/dist/cli.js list-tickets --limit 10
+node /Users/USER/node scripts/dist/cli.js list-tickets --limit 10
 
 # List open tickets
-node scripts/dist/cli.js list-tickets --status open --limit 10
+node /Users/USER/node scripts/dist/cli.js list-tickets --status open --limit 10
 
 # Get specific ticket
-node scripts/dist/cli.js get-ticket --id 12345
+node /Users/USER/node scripts/dist/cli.js get-ticket --id 12345
 
 # Search customers by email
-node scripts/dist/cli.js list-customers --email john@example.com
+node /Users/USER/node scripts/dist/cli.js list-customers --email john@example.com
 
 # Add a message to a ticket (from agent)
-node scripts/dist/cli.js add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
+node /Users/USER/node scripts/dist/cli.js add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
 ```
 
 ## How It Works
