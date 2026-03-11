@@ -27,7 +27,7 @@ Dedicated agent for Gorgias helpdesk operations with isolated API access
 ## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USER/claude-code-plugin-gorgias.git
+git clone https://github.com/bigl34/claude-code-plugin-gorgias.git
 cd claude-code-plugin-gorgias
 cp config.template.json config.json  # fill in your credentials
 cd scripts && npm install
