@@ -3,7 +3,7 @@
 
 Dedicated agent for Gorgias helpdesk operations with isolated API access
 
-![Version](https://img.shields.io/badge/version-1.1.12-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Version](https://img.shields.io/badge/version-1.3.0-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 
 ## Features
 
@@ -46,14 +46,6 @@ node scripts/dist/cli.js list-tickets
    cd scripts && npm install
    ```
 
-## Configuration
-
-Copy `config.template.json` to `config.json` and fill in the required values:
-
-| Field | Placeholder |
-|-------|-------------|
-| `credentials_path` | `/path/to/your/credentials` |
-
 ## Available Commands
 
 ### Ticket Commands
@@ -82,19 +74,19 @@ Copy `config.template.json` to `config.json` and fill in the required values:
 
 ```bash
 # List recent tickets
-node /Users/USER/node scripts/dist/cli.js list-tickets --limit 10
+node $HOME/node scripts/dist/cli.js list-tickets --limit 10
 
 # List open tickets
-node /Users/USER/node scripts/dist/cli.js list-tickets --status open --limit 10
+node $HOME/node scripts/dist/cli.js list-tickets --status open --limit 10
 
 # Get specific ticket
-node /Users/USER/node scripts/dist/cli.js get-ticket --id 12345
+node $HOME/node scripts/dist/cli.js get-ticket --id 12345
 
 # Search customers by email
-node /Users/USER/node scripts/dist/cli.js list-customers --email john@example.com
+node $HOME/node scripts/dist/cli.js list-customers --email john@example.com
 
 # Add a message to a ticket (from agent)
-node /Users/USER/node scripts/dist/cli.js add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
+node $HOME/node scripts/dist/cli.js add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
 ```
 
 ## How It Works

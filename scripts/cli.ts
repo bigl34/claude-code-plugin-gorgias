@@ -5,7 +5,7 @@
  * Zod-validated CLI for Gorgias support ticket management.
  */
 
-import { z, createCommand, runCli, cacheCommands, cliTypes } from "@local/cli-utils";
+import { z, createCommand, runCli, cacheCommands, cliTypes, wrapUntrustedField, buildSafeOutput } from "@local/cli-utils";
 import { GorgiasClient } from "./gorgias-client.js";
 
 // Define commands with Zod schemas
@@ -36,23 +36,25 @@ const commands = {
       const needsClientFilter = status || search;
       const fetchLimit = needsClientFilter ? 100 : limit;
 
-      let result = await client.listTickets({
+      const result = await client.listTickets({
         limit: fetchLimit,
         orderBy,
       });
 
+      let tickets = result.data || [];
+
       // Client-side filtering for status (API doesn't support this)
-      if (status && result.data) {
-        result.data = result.data.filter(
-          (ticket: { status?: string }) =>
+      if (status) {
+        tickets = tickets.filter(
+          (ticket: any) =>
             ticket.status?.toLowerCase() === status.toLowerCase()
         );
       }
 
       // Client-side filtering for search (matches subject or excerpt)
-      if (search && result.data) {
+      if (search) {
         const searchTerm = search.toLowerCase();
-        result.data = result.data.filter((ticket: { subject?: string; excerpt?: string }) => {
+        tickets = tickets.filter((ticket: any) => {
           const subject = (ticket.subject || "").toLowerCase();
           const excerpt = (ticket.excerpt || "").toLowerCase();
           return subject.includes(searchTerm) || excerpt.includes(searchTerm);
@@ -60,11 +62,32 @@ const commands = {
       }
 
       // Apply limit after filtering
-      if (result.data) {
-        result.data = result.data.slice(0, limit);
-      }
+      tickets = tickets.slice(0, limit);
 
-      return result;
+      // Wrap each ticket with content safety
+      const wrappedTickets = tickets.map((ticket: any) => ({
+        metadata: {
+          id: ticket.id,
+          status: ticket.status,
+          priority: ticket.priority,
+          channel: ticket.channel,
+          created_datetime: ticket.created_datetime,
+          updated_datetime: ticket.updated_datetime,
+          tags: (ticket.tags || []).map((t: any) => t?.name),
+          messages_count: ticket.messages_count,
+        },
+        content: {
+          subject: wrapUntrustedField("subject", ticket.subject, { maxChars: 500 }),
+          excerpt: wrapUntrustedField("excerpt", ticket.excerpt, { maxChars: 500 }),
+          customerName: wrapUntrustedField("customer.name", ticket.customer?.name, { maxChars: 200 }),
+          customerEmail: wrapUntrustedField("customer.email", ticket.customer?.email, { maxChars: 200 }),
+        },
+      }));
+
+      return buildSafeOutput(
+        { command: "list-tickets", count: wrappedTickets.length },
+        { tickets: wrappedTickets }
+      );
     },
     "List tickets with optional filtering"
   ),
@@ -75,7 +98,50 @@ const commands = {
     }),
     async (args, client: GorgiasClient) => {
       const { id } = args as { id: number };
-      return client.getTicket(id);
+      const ticket: any = await client.getTicket(id);
+
+      const metadata = {
+        id: ticket.id,
+        status: ticket.status,
+        priority: ticket.priority,
+        channel: ticket.channel,
+        created_datetime: ticket.created_datetime,
+        updated_datetime: ticket.updated_datetime,
+        opened_datetime: ticket.opened_datetime,
+        closed_datetime: ticket.closed_datetime,
+        tags: (ticket.tags || []).map((t: any) => t?.name),
+        messages_count: ticket.messages_count,
+        is_unread: ticket.is_unread,
+      };
+
+      const messages = (ticket.messages || []).map((msg: any) => ({
+        metadata: {
+          id: msg.id,
+          from_agent: msg.from_agent,
+          created_datetime: msg.created_datetime,
+        },
+        content: {
+          body: wrapUntrustedField(
+            "message.body",
+            msg.body_text || msg.body_html || "",
+            {
+              maxChars: 8000,
+              convertHtml: !msg.body_text && !!msg.body_html,
+            }
+          ),
+          senderName: wrapUntrustedField("message.sender.name", msg.sender?.name, { maxChars: 200 }),
+          senderEmail: wrapUntrustedField("message.sender.email", msg.sender?.email, { maxChars: 200 }),
+        },
+      }));
+
+      const content = {
+        subject: wrapUntrustedField("subject", ticket.subject, { maxChars: 500 }),
+        customerName: wrapUntrustedField("customer.name", ticket.customer?.name, { maxChars: 200 }),
+        customerEmail: wrapUntrustedField("customer.email", ticket.customer?.email, { maxChars: 200 }),
+        messages,
+      };
+
+      return buildSafeOutput(metadata, content);
     },
     "Get ticket details by ID"
   ),
@@ -122,7 +188,25 @@ const commands = {
     }),
     async (args, client: GorgiasClient) => {
       const { limit, email } = args as { limit: number; email?: string };
-      return client.listCustomers({ limit, email });
+      const result = await client.listCustomers({ limit, email });
+
+      const customers = (result.data || []).map((customer: any) => ({
+        metadata: {
+          id: customer.id,
+          created_datetime: customer.created_datetime,
+        },
+        content: {
+          name: wrapUntrustedField("name", customer.name, { maxChars: 200 }),
+          firstname: wrapUntrustedField("firstname", customer.firstname, { maxChars: 200 }),
+          lastname: wrapUntrustedField("lastname", customer.lastname, { maxChars: 200 }),
+          email: wrapUntrustedField("email", customer.email, { maxChars: 200 }),
+        },
+      }));
+
+      return buildSafeOutput(
+        { command: "list-customers", count: customers.length },
+        { customers }
+      );
     },
     "List customers with optional email filter"
   ),
@@ -133,7 +217,21 @@ const commands = {
     }),
     async (args, client: GorgiasClient) => {
       const { id } = args as { id: number };
-      return client.getCustomer(id);
+      const customer: any = await client.getCustomer(id);
+
+      return buildSafeOutput(
+        {
+          command: "get-customer",
+          id: customer.id,
+          created_datetime: customer.created_datetime,
+        },
+        {
+          name: wrapUntrustedField("name", customer.name, { maxChars: 200 }),
+          firstname: wrapUntrustedField("firstname", customer.firstname, { maxChars: 200 }),
+          lastname: wrapUntrustedField("lastname", customer.lastname, { maxChars: 200 }),
+          email: wrapUntrustedField("email", customer.email, { maxChars: 200 }),
+        }
+      );
     },
     "Get customer details by ID"
   ),
