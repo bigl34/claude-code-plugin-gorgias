@@ -3,7 +3,7 @@
 
 Dedicated agent for Gorgias helpdesk operations with isolated API access
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Version](https://img.shields.io/badge/version-1.7.0-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 
 ## Features
 
@@ -11,10 +11,15 @@ Dedicated agent for Gorgias helpdesk operations with isolated API access
 - **list-tickets** — List tickets
 - **get-ticket** — Get ticket details
 - **create-ticket** — Create a new ticket
-- **add-message** — Add message to ticket
+- **add-message** — Add an API-channel message to a non-email ticket
 - Customer
 - **list-customers** — List customers
 - **get-customer** — Get customer details
+- **export-customers** — Export masked/hashed customer dedupe evidence
+- **generate-merge-manifest** — Generate a customer merge approval manifest from an export
+- **discover-customer-matches** — Exhaustively scan customers/tickets/messages into encrypted staging and produce a non-executable v2 review proposal
+- **merge-customers** — Shadow-report, enforce, or execute an approved customer merge batch
+- **verify-merge-batch** — Verify target/source status after a merge batch
 - Utility
 - **list-tools** — List all available CLI commands
 
@@ -30,11 +35,11 @@ Dedicated agent for Gorgias helpdesk operations with isolated API access
 git clone https://github.com/bigl34/claude-code-plugin-gorgias.git
 cd claude-code-plugin-gorgias
 cp config.template.json config.json  # fill in your credentials
-cd scripts && npm install
+npm --prefix scripts install
 ```
 
 ```bash
-node scripts/dist/cli.js list-tickets
+npm --prefix scripts run cli -- list-tickets
 ```
 
 ## Installation
@@ -50,19 +55,24 @@ node scripts/dist/cli.js list-tickets
 
 ### Ticket Commands
 
-| Command         | Description           | Options                                                     |
-| --------------- | --------------------- | ----------------------------------------------------------- |
-| `list-tickets`  | List tickets          | `--limit`, `--status`, `--order-by`                         |
-| `get-ticket`    | Get ticket details    | `--id` (required)                                           |
-| `create-ticket` | Create a new ticket   | `--customer-email`, `--subject`, `--message` (all required) |
-| `add-message`   | Add message to ticket | `--ticket-id`, `--message`, `--from-agent` (all required)   |
+| Command         | Description                                      | Options                                                                                                               |
+| --------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `list-tickets`  | List tickets                                     | `--limit`, `--status`, `--search`, `--order-by`, `--cursor`, `--resume-token`, `--checkpoint-path`, `--updated-after` |
+| `get-ticket`    | Get ticket details                               | `--id` (required)                                                                                                     |
+| `create-ticket` | Create a new ticket                              | `--customer-email`, `--subject`, `--message` (all required)                                                           |
+| `add-message`   | Add an API-channel message to a non-email ticket | `--ticket-id`, `--message`, `--from-agent` (all required)                                                             |
 
 ### Customer Commands
 
-| Command          | Description          | Options              |
-| ---------------- | -------------------- | -------------------- |
-| `list-customers` | List customers       | `--limit`, `--email` |
-| `get-customer`   | Get customer details | `--id` (required)    |
+| Command                     | Description                                                                                                         | Options                                                                                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-customers`            | List customers                                                                                                      | `--limit`, `--email`                                                                                                                                                                   |
+| `get-customer`              | Get customer details                                                                                                | `--id` (required)                                                                                                                                                                      |
+| `export-customers`          | Export masked/hashed customer dedupe evidence                                                                       | `--limit`, `--page-limit`, `--max-pages`, `--output-path`                                                                                                                              |
+| `generate-merge-manifest`   | Generate a customer merge approval manifest from an export                                                          | `--export-path`, `--output-path`, `--batch-id`                                                                                                                                         |
+| `discover-customer-matches` | Exhaustively scan customers/tickets/messages into encrypted staging and produce a non-executable v2 review proposal | `--run-dir`, `--key-path`, `--default-country`, `--expected-customer-count`, `--request-interval-ms`, `--max-retries`, `--max-stabilization-passes`, `--resume`, `--audit-per-stratum` |
+| `merge-customers`           | Shadow-report, enforce, or execute an approved customer merge batch                                                 | `--manifest`, `--batch`, `--execute`, `--integration-mode shadow\                                                                                                                      |
+| `verify-merge-batch`        | Verify target/source status after a merge batch                                                                     | `--manifest`, `--batch`                                                                                                                                                                |
 
 ### Utility Commands
 
@@ -74,19 +84,34 @@ node scripts/dist/cli.js list-tickets
 
 ```bash
 # List recent tickets
-node $HOME/node scripts/dist/cli.js list-tickets --limit 10
+npm --prefix "scripts" run cli -- list-tickets --limit 10
 
 # List open tickets
-node $HOME/node scripts/dist/cli.js list-tickets --status open --limit 10
+npm --prefix "scripts" run cli -- list-tickets --status open --limit 10
 
 # Get specific ticket
-node $HOME/node scripts/dist/cli.js get-ticket --id 12345
+npm --prefix "scripts" run cli -- get-ticket --id 12345
 
 # Search customers by email
-node $HOME/node scripts/dist/cli.js list-customers --email john@example.com
+npm --prefix "scripts" run cli -- list-customers --email john@example.com
 
-# Add a message to a ticket (from agent)
-node $HOME/node scripts/dist/cli.js add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
+# Export dedupe evidence without raw emails/phones
+npm --prefix "scripts" run cli -- export-customers --output-path /tmp/gorgias-customers-export.json
+
+# Generate a review manifest; edit approvals in the manifest before any write
+npm --prefix "scripts" run cli -- generate-merge-manifest --export-path /tmp/gorgias-customers-export.json --output-path /tmp/gorgias-merge-manifest.json
+
+# Build an exhaustive proposal-only review run; this never merges customers
+npm --prefix "scripts" run cli -- discover-customer-matches --run-dir "$HOME/biz/var/gorgias-customer-dedupe/review-run" --key-path "$HOME/biz/var/gorgias-customer-dedupe/review-run/run.key" --default-country GB --expected-customer-count "<customer count from your preview>" --request-interval-ms 1000
+
+# Shadow-report an approved batch; use enforce for the final dry-run gate
+npm --prefix "scripts" run cli -- merge-customers --manifest /tmp/gorgias-merge-manifest.json --batch batch-1 --dry-run
+
+# Live execution requires an enforced preflight and explicit confirmation
+npm --prefix "scripts" run cli -- merge-customers --manifest /tmp/gorgias-merge-manifest.json --batch batch-1 --integration-mode enforce --execute --confirm
+
+# Add an API-channel message to a non-email ticket (from agent)
+npm --prefix "scripts" run cli -- add-message --ticket-id 12345 --message "Thank you for contacting us" --from-agent true
 ```
 
 ## How It Works

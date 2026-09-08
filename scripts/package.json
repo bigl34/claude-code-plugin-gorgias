@@ -1,20 +1,25 @@
 {
-  "name": "gorgias-support-scripts",
-  "version": "1.0.0",
+  "name": "gorgias-support-manager",
+  "version": "1.6.1",
   "type": "module",
   "scripts": {
     "cli": "tsx cli.ts",
     "build": "tsc",
-    "start": "node dist/cli.js"
+    "spam-review": "tsx spam-review.ts",
+    "spam-review:rollback": "tsx spam-review-rollback.ts",
+    "spam-review:freshness": "tsx check-spam-review-freshness.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "start": "tsx cli.ts"
   },
   "dependencies": {
-    "node-fetch": "^3.3.2",
+    "@local/cli-utils": "github:bigl34/claude-code-plugin-shared",
     "@local/plugin-cache": "github:bigl34/claude-code-plugin-cache",
-    "@local/cli-utils": "github:bigl34/claude-code-plugin-shared"
+    "libphonenumber-js": "1.13.9",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "tsx": "^4.0.0",
-    "typescript": "^5.0.0"
+    "@types/node": "22.19.19",
+    "tsx": "4.22.3",
+    "typescript": "5.9.3"
   }
 }
