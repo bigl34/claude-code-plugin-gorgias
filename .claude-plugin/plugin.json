@@ -1,6 +1,6 @@
 {
   "name": "gorgias-support-manager",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Dedicated agent for Gorgias helpdesk operations with isolated API access",
   "repository": "https://github.com/bigl34/claude-code-plugin-gorgias"
 }

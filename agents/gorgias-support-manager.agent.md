@@ -1,7 +1,6 @@
 ---
 name: gorgias-support-manager
 description: Use this agent for Gorgias customer support operations including tickets, customers, and messages. This agent has exclusive access to the Gorgias helpdesk.
-model: claude-opus-4-6
 color: error
 mode: subagent
 ---

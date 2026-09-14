@@ -3,7 +3,7 @@
 
 Dedicated agent for Gorgias helpdesk operations with isolated API access
 
-![Version](https://img.shields.io/badge/version-1.7.0-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Version](https://img.shields.io/badge/version-1.7.1-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 
 ## Features
 
