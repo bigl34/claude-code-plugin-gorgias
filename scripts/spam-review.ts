@@ -573,6 +573,20 @@ export async function adjudicateLegacyIntent(
   };
 }
 
+function buildRunSummary(
+  input: Omit<RunSummary, "schema" | "eligible" | "applied" | "capped" | "uncertain">
+    & Partial<Pick<RunSummary, "applied" | "capped" | "uncertain">>,
+): RunSummary {
+  return {
+    schema: "gorgias-spam-review-run.v1",
+    ...input,
+    eligible: input.tickets.filter((item) => item.eligible).length,
+    applied: input.applied ?? input.tickets.filter((item) => item.action === "applied").length,
+    capped: input.capped ?? input.tickets.filter((item) => item.action === "capped").length,
+    uncertain: input.uncertain ?? input.tickets.filter((item) => item.decision.verdict === "uncertain" || item.action === "manual_trash").length,
+  };
+}
+
 export async function runSourceDateReview(
   options: RunReviewOptions,
   deps: RunReviewDeps,
@@ -581,7 +595,15 @@ export async function runSourceDateReview(
   const trackDayState = options.live && options.ticketId === undefined;
   const runId = `${options.sourceDate}:${startedAt.toISOString().replace(/[^0-9TZ]/g, "")}:${randomUUID().slice(0, 8)}`;
   const window = windowForSourceDate(options.sourceDate, deps.settings.timeZone);
-  const modelMeta = deps.classifier.metadata();
+  const mode: RunSummary["mode"] = options.live ? "live" : "dry-run";
+  const summaryContext = {
+    runId,
+    sourceDate: options.sourceDate,
+    startedAt: startedAt.toISOString(),
+    mode,
+    ...deps.classifier.metadata(),
+    window: { start: window.start.toISOString(), end: window.end.toISOString(), timeZone: window.timeZone },
+  };
   const priorState = readDayState(options.stateRoot, options.sourceDate);
   const runningState: DayState = {
     schema: "gorgias-spam-review-day.v1",
@@ -614,26 +636,20 @@ export async function runSourceDateReview(
     summaries = recoveredSummaries;
     recoveredCount = recoveredSummaries.length;
     if (trackDayState && recoveredCount > 0) {
-      saveRunSummary(options.stateRoot, {
-        schema: "gorgias-spam-review-run.v1",
-        runId,
-        sourceDate: options.sourceDate,
-        startedAt: startedAt.toISOString(),
+      saveRunSummary(options.stateRoot, buildRunSummary({
+        ...summaryContext,
         completedAt: new Date().toISOString(),
         mode: "live",
         status: "running",
-        ...modelMeta,
-        window: { start: window.start.toISOString(), end: window.end.toISOString(), timeZone: window.timeZone },
         pagesFetched,
         rowsFetched,
         candidates: recoveredCount,
-        eligible: summaries.filter((item) => item.eligible).length,
         applied: recoveredCount,
         capped: 0,
         uncertain: summaries.filter((item) => item.decision.verdict === "uncertain").length,
         tickets: summaries,
         notificationPending: true,
-      });
+      }));
       writeDayState(options.stateRoot, { ...runningState, notificationPending: true });
     }
     const enumeration = await enumerateSpamCandidates(deps.client, window, {
@@ -726,26 +742,17 @@ export async function runSourceDateReview(
         const ticketSummary = summaries.find((item) => item.ticketId === entry.ticket.id);
         if (!ticketSummary) throw new Error(`missing run summary entry for ticket ${entry.ticket.id}`);
         const intentId = `${runId}:${entry.ticket.id}`;
-        saveRunSummary(options.stateRoot, {
-          schema: "gorgias-spam-review-run.v1",
-          runId,
-          sourceDate: options.sourceDate,
-          startedAt: startedAt.toISOString(),
+        saveRunSummary(options.stateRoot, buildRunSummary({
+          ...summaryContext,
           completedAt: new Date().toISOString(),
           mode: "live",
           status: "running",
-          ...modelMeta,
-          window: { start: window.start.toISOString(), end: window.end.toISOString(), timeZone: window.timeZone },
           pagesFetched,
           rowsFetched,
           candidates: tickets.length + recoveredCount,
-          eligible: summaries.filter((item) => item.eligible).length,
-          applied: summaries.filter((item) => item.action === "applied").length,
-          capped: summaries.filter((item) => item.action === "capped").length,
-          uncertain: summaries.filter((item) => item.decision.verdict === "uncertain" || item.action === "manual_trash").length,
           tickets: summaries,
           notificationPending: false,
-        });
+        }));
         const eventSnapshot = await captureEventSnapshot(deps.client, entry.ticket.id);
         if (eventSnapshot.attribution !== entry.attribution) {
           ticketSummary.trashAttribution = eventSnapshot.attribution;
@@ -837,30 +844,21 @@ export async function runSourceDateReview(
       }
     }
 
-    const applied = summaries.filter((item) => item.action === "applied").length;
     const capped = summaries.filter((item) => item.action === "capped").length;
     const uncertain = summaries.filter((item) => item.decision.verdict === "uncertain" || item.action === "manual_trash").length;
     const status = capped > 0 ? "complete_capped" : "complete";
-    const summary: RunSummary = {
-      schema: "gorgias-spam-review-run.v1",
-      runId,
-      sourceDate: options.sourceDate,
-      startedAt: startedAt.toISOString(),
+    const summary = buildRunSummary({
+      ...summaryContext,
       completedAt: new Date().toISOString(),
-      mode: options.live ? "live" : "dry-run",
       status,
-      ...modelMeta,
-      window: { start: window.start.toISOString(), end: window.end.toISOString(), timeZone: window.timeZone },
       pagesFetched,
       rowsFetched,
       candidates: tickets.length + recoveredCount,
-      eligible: summaries.filter((item) => item.eligible).length,
-      applied,
       capped,
       uncertain,
       tickets: summaries,
       notificationPending: trackDayState && (summaries.length > 0 || capped > 0 || uncertain > 0),
-    };
+    });
     saveRunSummary(options.stateRoot, summary);
 
     if (trackDayState) {
@@ -889,28 +887,18 @@ export async function runSourceDateReview(
       && Number.isFinite(priorAlertAt)
       && startedAt.getTime() - priorAlertAt < 12 * 3_600_000;
     const notificationPending = trackDayState && !alertDebounced;
-    const summary: RunSummary = {
-      schema: "gorgias-spam-review-run.v1",
-      runId,
-      sourceDate: options.sourceDate,
-      startedAt: startedAt.toISOString(),
+    const summary = buildRunSummary({
+      ...summaryContext,
       completedAt: new Date().toISOString(),
-      mode: options.live ? "live" : "dry-run",
       status: "failed",
-      ...modelMeta,
-      window: { start: window.start.toISOString(), end: window.end.toISOString(), timeZone: window.timeZone },
       pagesFetched,
       rowsFetched,
       candidates: tickets.length + recoveredCount,
-      eligible: summaries.filter((item) => item.eligible).length,
-      applied: summaries.filter((item) => item.action === "applied").length,
-      capped: summaries.filter((item) => item.action === "capped").length,
-      uncertain: summaries.filter((item) => item.decision.verdict === "uncertain" || item.action === "manual_trash").length,
       tickets: summaries,
       notificationPending,
       errorCategory: category,
       errorHash: hash,
-    };
+    });
     saveRunSummary(options.stateRoot, summary);
     if (trackDayState) {
       writeDayState(options.stateRoot, {

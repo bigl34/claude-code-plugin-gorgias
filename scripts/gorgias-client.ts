@@ -64,6 +64,7 @@ export interface Message {
   source?: Record<string, unknown> | null;
   auth_customer_identity?: Record<string, unknown> | null;
   channel?: string;
+  via?: string;
   integration_id?: number | null;
   public?: boolean;
   external_id?: string | null;
@@ -147,7 +148,6 @@ const BACKOFF_JITTER_RATIO = 0.25;
 export class GorgiasClient {
   private config: GorgiasConfig;
   private baseUrl: string;
-  private cacheDisabled: boolean = false;
   private fetchImpl: typeof fetch;
   private sleepImpl: (ms: number) => Promise<void>;
   private randomImpl: () => number;
@@ -206,12 +206,10 @@ export class GorgiasClient {
 
 
   disableCache(): void {
-    this.cacheDisabled = true;
     this.cache.disable();
   }
 
   enableCache(): void {
-    this.cacheDisabled = false;
     this.cache.enable();
   }
 
@@ -224,7 +222,7 @@ export class GorgiasClient {
   }
 
   invalidateCustomerCaches(): number {
-    const wasDisabled = this.cacheDisabled;
+    const wasDisabled = this.cache.isDisabled();
     if (wasDisabled) this.cache.enable();
     try {
       return this.cache.invalidatePattern(/^customer/) + this.cache.invalidatePattern(/^customers(?:\?|$)/);
@@ -371,7 +369,7 @@ export class GorgiasClient {
         }
         return result;
       },
-      { ttl: TTL.FIVE_MINUTES, bypassCache: this.cacheDisabled || options?.fresh === true }
+      { ttl: TTL.FIVE_MINUTES, bypassCache: options?.fresh === true }
     );
   }
 
@@ -381,7 +379,7 @@ export class GorgiasClient {
     return this.cache.getOrFetch(
       cacheKey,
       () => this.request<Ticket>("GET", `/tickets/${ticketId}`),
-      { ttl: TTL.MINUTE, bypassCache: this.cacheDisabled || options?.fresh === true }
+      { ttl: TTL.MINUTE, bypassCache: options?.fresh === true }
     );
   }
 
@@ -402,7 +400,7 @@ export class GorgiasClient {
   }
 
   private invalidateTicketCaches(ticketId: number): void {
-    const wasDisabled = this.cacheDisabled;
+    const wasDisabled = this.cache.isDisabled();
     if (wasDisabled) this.cache.enable();
     try {
       this.cache.invalidate(createCacheKey("ticket", { id: ticketId }));
@@ -483,6 +481,25 @@ export class GorgiasClient {
     return result;
   }
 
+  async createPrivateReminder(data: { customerEmail: string; subject: string; message: string }): Promise<Ticket> {
+    const result = await this.request<Ticket>("POST", "/tickets", {
+      channel: "api", status: "open", subject: data.subject,
+      customer: { email: data.customerEmail },
+      messages: [{ channel: "internal-note", body_text: data.message, public: false, from_agent: true, via: "api", sender: { email: this.config.email } }],
+    });
+    this.cache.invalidatePattern(/^ticket/);
+    return result;
+  }
+
+  async addInternalNote(ticketId: number, message: string): Promise<Message> {
+    const result = await this.request<Message>("POST", `/tickets/${ticketId}/messages`, {
+      channel: "internal-note", body_text: message, public: false, from_agent: true, via: "api", sender: { email: this.config.email },
+    });
+    this.cache.invalidate(createCacheKey("ticket", { id: ticketId }));
+    this.cache.invalidatePattern(/^tickets(?:\?|$)/);
+    return result;
+  }
+
   async addMessage(
     ticketId: number,
     message: string,
@@ -536,7 +553,7 @@ export class GorgiasClient {
 
         return this.request<ListResponse<Customer>>("GET", endpoint);
       },
-      { ttl: TTL.FIFTEEN_MINUTES, bypassCache: this.cacheDisabled }
+      { ttl: TTL.FIFTEEN_MINUTES }
     );
   }
 
@@ -546,7 +563,7 @@ export class GorgiasClient {
     return this.cache.getOrFetch(
       cacheKey,
       () => this.request<Customer>("GET", `/customers/${customerId}`),
-      { ttl: TTL.FIFTEEN_MINUTES, bypassCache: this.cacheDisabled }
+      { ttl: TTL.FIFTEEN_MINUTES }
     );
   }
 
@@ -642,25 +659,6 @@ export class GorgiasClient {
       status: "ok",
       customer: await response.json() as Customer,
     };
-  }
-
-
-  getTools(): Array<{ name: string; description: string }> {
-    return [
-      { name: "list-tickets", description: "List tickets with optional filters" },
-      { name: "get-ticket", description: "Get a specific ticket by ID" },
-      { name: "create-ticket", description: "Create a new ticket" },
-      { name: "add-message", description: "Add a message to an existing ticket" },
-      { name: "list-customers", description: "List customers with optional filters" },
-      { name: "get-customer", description: "Get a specific customer by ID" },
-      { name: "export-customers", description: "Export PII-minimized customer dedupe evidence" },
-      { name: "generate-merge-manifest", description: "Generate a customer merge approval manifest" },
-      { name: "discover-customer-matches", description: "Build a non-executable customer match review proposal" },
-      { name: "merge-customers", description: "Merge approved Gorgias customer pairs from a manifest" },
-      { name: "verify-merge-batch", description: "Verify post-merge customer outcomes from a manifest batch" },
-      { name: "cache-stats", description: "Show cache statistics" },
-      { name: "cache-clear", description: "Clear all cached data" },
-    ];
   }
 }
 

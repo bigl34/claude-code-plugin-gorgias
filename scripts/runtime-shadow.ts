@@ -171,6 +171,7 @@ function assertRuntimeContext(environment: NodeJS.ProcessEnv): void {
   const forbidden = [
     "CLAUDE_CODE_OAUTH_TOKEN",
     "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY",
     "GOOGLE_API_KEY",
     "GORGIAS_API_KEY",
     "SLACK_BOT_TOKEN",

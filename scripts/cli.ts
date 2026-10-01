@@ -3,10 +3,10 @@
 import { z, createCommand, runCli, cacheCommands, cliTypes, wrapUntrustedField, buildSafeOutput } from "@local/cli-utils";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { GorgiasClient } from "./gorgias-client.js";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { GorgiasApiError, GorgiasClient } from "./gorgias-client.js";
 import {
   buildMergeManifestFromSummaries,
   summarizeCustomerForDedupe,
@@ -41,6 +41,12 @@ type TicketDetails = Ticket & {
   closed_datetime?: string;
   messages_count?: number;
   is_unread?: boolean;
+  satisfaction_survey?: {
+    score?: number | null;
+    body_text?: string | null;
+    sent_datetime?: string | null;
+    scored_datetime?: string | null;
+  } | null;
 };
 type Customer = Awaited<ReturnType<GorgiasClient["getCustomer"]>>;
 type CustomerInspection = Awaited<ReturnType<GorgiasClient["inspectCustomer"]>>;
@@ -100,6 +106,226 @@ function wrapProviderResponse(command: string, result: unknown) {
     {
       result: wrapUntrustedField("result", JSON.stringify(result), { maxChars: 12000 }),
     },
+  );
+}
+
+export function shapeTicketDetails(ticket: TicketDetails, subdomain: string) {
+  const metadata = {
+    id: ticket.id,
+    status: ticket.status,
+    priority: ticket.priority,
+    channel: ticket.channel,
+    created_datetime: ticket.created_datetime,
+    updated_datetime: ticket.updated_datetime,
+    opened_datetime: ticket.opened_datetime,
+    closed_datetime: ticket.closed_datetime,
+    tags: (ticket.tags || []).map((t: TicketTag) => t?.name),
+    messages_count: ticket.messages_count,
+    is_unread: ticket.is_unread,
+    spam: ticket.spam,
+    trashed_datetime: ticket.trashed_datetime ?? null,
+    customer_subdomain: subdomain,
+    satisfaction_survey: ticket.satisfaction_survey
+      ? {
+          score: ticket.satisfaction_survey.score ?? null,
+          sent_datetime: ticket.satisfaction_survey.sent_datetime ?? null,
+          scored_datetime: ticket.satisfaction_survey.scored_datetime ?? null,
+        }
+      : null,
+  };
+
+  const messages = (ticket.messages || []).map((msg: TicketMessage) => ({
+    metadata: {
+      id: msg.id,
+      from_agent: msg.from_agent,
+      public: msg.public ?? null,
+      channel: msg.channel ?? null,
+      via: msg.via ?? null,
+      source_type: typeof msg.source?.type === "string" ? msg.source.type : null,
+      created_datetime: msg.created_datetime,
+    },
+    content: {
+      body: wrapUntrustedField(
+        "message.body",
+        msg.body_text || msg.body_html || "",
+        {
+          maxChars: 8000,
+          convertHtml: !msg.body_text && !!msg.body_html,
+        }
+      ),
+      senderName: wrapUntrustedField("message.sender.name", msg.sender?.name, { maxChars: 200 }),
+      senderEmail: wrapUntrustedField("message.sender.email", msg.sender?.email, { maxChars: 200 }),
+    },
+  }));
+
+  const content = {
+    subject: wrapUntrustedField("subject", ticket.subject, { maxChars: 500 }),
+    customerName: wrapUntrustedField("customer.name", ticket.customer?.name, { maxChars: 200 }),
+    customerEmail: wrapUntrustedField("customer.email", ticket.customer?.email, { maxChars: 200 }),
+    satisfactionComment: wrapUntrustedField("satisfaction_survey.body_text", ticket.satisfaction_survey?.body_text, { maxChars: 2000 }),
+    messages,
+  };
+
+  return { metadata, content };
+}
+
+const GET_TICKETS_MAX_IDS = 50;
+
+const POSITIVE_INTEGER_TOKEN = /^[1-9][0-9]*$/;
+
+type GetTicketsStopReason = "budget" | "rate_limited" | "provider_error";
+
+type GetTicketsFailureCategory = "http_4xx" | "http_5xx" | "timeout" | "network" | "parse";
+
+type GetTicketsFailure = { id: number; status: number | null; category: GetTicketsFailureCategory };
+
+type GetTicketsTiming = {
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+};
+
+const defaultGetTicketsTiming: GetTicketsTiming = {
+  now: Date.now,
+  sleep: (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
+function parseTicketIdList(raw: string): { ids: number[]; duplicatesIgnored: number } {
+  const tokens = raw.split(",").map((token) => token.trim());
+  const ids: number[] = [];
+  const seen = new Set<number>();
+  let duplicatesIgnored = 0;
+  for (const token of tokens) {
+    const isPositiveIntegerToken = POSITIVE_INTEGER_TOKEN.test(token);
+    const id = Number(token);
+    if (!isPositiveIntegerToken || !Number.isSafeInteger(id)) {
+      throw new Error(`--ids must be a comma-separated list of positive integer ticket IDs (invalid token: ${JSON.stringify(token.slice(0, 40))})`);
+    }
+    if (seen.has(id)) {
+      duplicatesIgnored += 1;
+      continue;
+    }
+    seen.add(id);
+    ids.push(id);
+  }
+  if (ids.length < 1 || ids.length > GET_TICKETS_MAX_IDS) {
+    throw new Error(`--ids must contain between 1 and ${GET_TICKETS_MAX_IDS} unique ticket IDs (got ${ids.length})`);
+  }
+  return { ids, duplicatesIgnored };
+}
+
+function isTimeoutError(error: Error): boolean {
+  const isAbortName = error.name === "AbortError" || error.name === "TimeoutError";
+  const isClientTimeoutMessage = error.message.startsWith("Gorgias API request timed out");
+  return isAbortName || isClientTimeoutMessage;
+}
+
+function transportFailureCategory(error: unknown): GetTicketsFailureCategory {
+  if (error instanceof SyntaxError) return "parse";
+  if (error instanceof Error && isTimeoutError(error)) return "timeout";
+  return "network";
+}
+
+type TicketFetchErrorOutcome =
+  | { kind: "not_found" }
+  | { kind: "failed_continue"; failure: GetTicketsFailure }
+  | { kind: "failed_stop"; failure: GetTicketsFailure }
+  | { kind: "rate_limited"; retryAfterMs: number | null };
+
+function classifyTicketFetchError(id: number, error: unknown): TicketFetchErrorOutcome {
+  if (!(error instanceof GorgiasApiError)) {
+    const category = transportFailureCategory(error);
+    const failure: GetTicketsFailure = { id, status: null, category };
+    if (category === "parse") return { kind: "failed_continue", failure };
+    return { kind: "failed_stop", failure };
+  }
+  const status = error.status;
+  if (status === 404 || status === 410) return { kind: "not_found" };
+  if (status === 401 || status === 403) {
+    throw new Error(`Gorgias authentication required (HTTP ${status})`);
+  }
+  if (status === 429) return { kind: "rate_limited", retryAfterMs: error.retryAfterMs ?? null };
+  if (status >= 500) return { kind: "failed_stop", failure: { id, status, category: "http_5xx" } };
+  return { kind: "failed_continue", failure: { id, status, category: "http_4xx" } };
+}
+
+type GetTicketsArgs = { ids: string; intervalMs: number; budgetMs: number };
+
+type GetTicketsClient = Pick<GorgiasClient, "disableCache" | "getTicket" | "getSubdomain">;
+
+async function getTicketsBatch(args: GetTicketsArgs, client: GetTicketsClient, timing: GetTicketsTiming) {
+  client.disableCache();
+  const { ids, duplicatesIgnored } = parseTicketIdList(args.ids);
+  const subdomain = client.getSubdomain();
+  const handlerStartedAt = timing.now();
+  const tickets: Array<{ requested_id: number } & ReturnType<typeof shapeTicketDetails>> = [];
+  const notFound: number[] = [];
+  const failures: GetTicketsFailure[] = [];
+  let unattempted: number[] = [];
+  let stopReason: GetTicketsStopReason | null = null;
+  let retryAfterMs: number | null = null;
+  let lastStartedAt = Number.NEGATIVE_INFINITY;
+
+  for (let index = 0; index < ids.length; index += 1) {
+    const id = ids[index];
+    const idsFromThis = ids.slice(index);
+    const idsAfterThis = ids.slice(index + 1);
+    const waitMs = Math.max(0, lastStartedAt + args.intervalMs - timing.now());
+    const elapsedAtStart = timing.now() - handlerStartedAt + waitMs;
+    if (elapsedAtStart >= args.budgetMs) {
+      unattempted = idsFromThis;
+      stopReason = "budget";
+      break;
+    }
+    if (waitMs > 0) await timing.sleep(waitMs);
+    lastStartedAt = timing.now();
+
+    let ticket: TicketDetails;
+    try {
+      ticket = await client.getTicket(id) as TicketDetails;
+    } catch (error) {
+      const outcome = classifyTicketFetchError(id, error);
+      if (outcome.kind === "not_found") {
+        notFound.push(id);
+        continue;
+      }
+      if (outcome.kind === "failed_continue") {
+        failures.push(outcome.failure);
+        continue;
+      }
+      if (outcome.kind === "rate_limited") {
+        unattempted = idsFromThis;
+        stopReason = "rate_limited";
+        retryAfterMs = outcome.retryAfterMs;
+        break;
+      }
+      failures.push(outcome.failure);
+      unattempted = idsAfterThis;
+      stopReason = "provider_error";
+      break;
+    }
+
+    try {
+      const shaped = shapeTicketDetails(ticket, subdomain);
+      tickets.push({ requested_id: id, ...shaped });
+    } catch {
+      failures.push({ id, status: null, category: "parse" });
+    }
+  }
+
+  return buildSafeOutput(
+    {
+      command: "get-tickets",
+      requested: ids.length,
+      returned: tickets.length,
+      duplicates_ignored: duplicatesIgnored,
+      not_found: notFound,
+      failures,
+      unattempted,
+      stop_reason: stopReason,
+      retry_after_ms: retryAfterMs,
+      customer_subdomain: subdomain,
+    },
+    { tickets },
   );
 }
 
@@ -193,11 +419,6 @@ function readMergeManifestV1(path: string): MergeManifest {
     throw new Error("merge manifest must match the exact gorgias-customer-merge-manifest.v1 schema");
   }
   return parsed.data as MergeManifest;
-}
-
-function writeJsonFile(path: string | undefined, value: unknown): void {
-  if (!path) return;
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function writeRestrictedFile(path: string, contents: string): void {
@@ -834,7 +1055,8 @@ function sanitizeMergeError(error: unknown): Record<string, unknown> {
 export const commands = {
   "list-tools": createCommand(
     z.object({}),
-    async (_args, client: GorgiasClient) => client.getTools(),
+    async (): Promise<Array<{ name: string; description: string }>> =>
+      Object.entries(commands).map(([name, command]) => ({ name, description: command.description ?? "" })),
     "List all available CLI commands",
     { sideEffect: "read" }
   ),
@@ -846,6 +1068,7 @@ export const commands = {
       search: z.string().optional().describe("Search tickets by keyword (client-side)"),
       orderBy: z.string().optional().describe("Order by field (e.g., created_datetime:desc)"),
       cursor: z.string().optional().describe("Opaque pagination cursor from metadata.next_cursor"),
+      customerId: cliTypes.int(1).optional().describe("Provider-side filter: only tickets of this Gorgias customer id"),
       resumeToken: z.string().optional().describe("Opaque filtered-pagination token from metadata.resume_token"),
       checkpointPath: z.string().optional().describe("Optional 0600 JSON checkpoint rewritten after every provider page"),
       updatedAfter: z.string().optional().describe(
@@ -853,12 +1076,13 @@ export const commands = {
       ),
     }),
     async (args, client: GorgiasClient) => {
-      const { limit, status, search, orderBy, cursor, resumeToken, checkpointPath, updatedAfter } = args as {
+      const { limit, status, search, orderBy, cursor, customerId, resumeToken, checkpointPath, updatedAfter } = args as {
         limit: number;
         status?: "open" | "closed";
         search?: string;
         orderBy?: string;
         cursor?: string;
+        customerId?: number;
         resumeToken?: string;
         checkpointPath?: string;
         updatedAfter?: string;
@@ -877,6 +1101,7 @@ export const commands = {
           search,
           orderBy,
           cursor,
+          customerId,
           updatedAfter,
           resumeToken,
         }, checkpoint);
@@ -902,55 +1127,28 @@ export const commands = {
     async (args, client: GorgiasClient) => {
       const { id } = args as { id: number };
       const ticket = await client.getTicket(id) as TicketDetails;
-
-      const metadata = {
-        id: ticket.id,
-        status: ticket.status,
-        priority: ticket.priority,
-        channel: ticket.channel,
-        created_datetime: ticket.created_datetime,
-        updated_datetime: ticket.updated_datetime,
-        opened_datetime: ticket.opened_datetime,
-        closed_datetime: ticket.closed_datetime,
-        tags: (ticket.tags || []).map((t: TicketTag) => t?.name),
-        messages_count: ticket.messages_count,
-        is_unread: ticket.is_unread,
-        spam: ticket.spam,
-        trashed_datetime: ticket.trashed_datetime ?? null,
-        customer_subdomain: client.getSubdomain(),
-      };
-
-      const messages = (ticket.messages || []).map((msg: TicketMessage) => ({
-        metadata: {
-          id: msg.id,
-          from_agent: msg.from_agent,
-          created_datetime: msg.created_datetime,
-        },
-        content: {
-          body: wrapUntrustedField(
-            "message.body",
-            msg.body_text || msg.body_html || "",
-            {
-              maxChars: 8000,
-              convertHtml: !msg.body_text && !!msg.body_html,
-            }
-          ),
-          senderName: wrapUntrustedField("message.sender.name", msg.sender?.name, { maxChars: 200 }),
-          senderEmail: wrapUntrustedField("message.sender.email", msg.sender?.email, { maxChars: 200 }),
-        },
-      }));
-
-      const content = {
-        subject: wrapUntrustedField("subject", ticket.subject, { maxChars: 500 }),
-        customerName: wrapUntrustedField("customer.name", ticket.customer?.name, { maxChars: 200 }),
-        customerEmail: wrapUntrustedField("customer.email", ticket.customer?.email, { maxChars: 200 }),
-        messages,
-      };
-
+      const { metadata, content } = shapeTicketDetails(ticket, client.getSubdomain());
       return buildSafeOutput(metadata, content);
     },
     "Get ticket details by ID",
     { sideEffect: "read" }
+  ),
+
+  "get-tickets": createCommand(
+    z.object({
+      ids: z.string().describe("Comma-separated ticket IDs (1-50 unique positive integers; duplicates are ignored)"),
+      intervalMs: intDefault(1000, 500, 5000).describe("Minimum start-to-start gap between ticket requests in milliseconds"),
+      budgetMs: intDefault(120000, 10000, 240000).describe("Stop starting new ticket requests once this many milliseconds have elapsed"),
+    }),
+    async (args, client: GorgiasClient, globals) => {
+      const testTiming = (globals as typeof globals & {
+        getTicketsTimingForTest?: GetTicketsTiming;
+      } | undefined)?.getTicketsTimingForTest;
+      const timing = testTiming ?? defaultGetTicketsTiming;
+      return getTicketsBatch(args as GetTicketsArgs, client, timing);
+    },
+    "Get details for up to 50 tickets by ID in one paced, uncached batch",
+    { sideEffect: "read", requiresSafeOutput: true }
   ),
 
   "create-ticket": createCommand(
@@ -1104,7 +1302,7 @@ export const commands = {
         },
         { customers },
       );
-      writeJsonFile(outputPath, output);
+      if (outputPath) writeRestrictedJson(outputPath, output);
       return output;
     },
     "Export PII-minimized customer dedupe evidence",
@@ -1130,7 +1328,7 @@ export const commands = {
         generatedAt: new Date().toISOString(),
         exporterVersion: serviceVersion(),
       });
-      writeJsonFile(outputPath, manifest);
+      if (outputPath) writeRestrictedJson(outputPath, manifest);
       return buildSafeOutput(
         {
           command: "generate-merge-manifest",
@@ -1779,7 +1977,16 @@ export const commands = {
   ...cacheCommands<GorgiasClient>(),
 };
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+let isCliEntry = false;
+try {
+  isCliEntry =
+    process.argv[1] !== undefined &&
+    import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+} catch {
+  isCliEntry = false;
+}
+
+if (isCliEntry) {
   runCli(commands, GorgiasClient, {
     programName: "gorgias-cli",
     description: "Gorgias support ticket management",

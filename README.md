@@ -3,13 +3,14 @@
 
 Dedicated agent for Gorgias helpdesk operations with isolated API access
 
-![Version](https://img.shields.io/badge/version-1.7.1-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Version](https://img.shields.io/badge/version-1.8.0-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 
 ## Features
 
 - Ticket
 - **list-tickets** — List tickets
 - **get-ticket** — Get ticket details
+- **get-tickets** — Get details for up to 50 tickets in one paced, uncached read (per-ticket output matches `get-ticket`, plus `requested_id`); per-id outcomes in `metadata.not_found`/`failures`/`unattempted`/`stop_reason`
 - **create-ticket** — Create a new ticket
 - **add-message** — Add an API-channel message to a non-email ticket
 - Customer
@@ -55,12 +56,13 @@ npm --prefix scripts run cli -- list-tickets
 
 ### Ticket Commands
 
-| Command         | Description                                      | Options                                                                                                               |
-| --------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `list-tickets`  | List tickets                                     | `--limit`, `--status`, `--search`, `--order-by`, `--cursor`, `--resume-token`, `--checkpoint-path`, `--updated-after` |
-| `get-ticket`    | Get ticket details                               | `--id` (required)                                                                                                     |
-| `create-ticket` | Create a new ticket                              | `--customer-email`, `--subject`, `--message` (all required)                                                           |
-| `add-message`   | Add an API-channel message to a non-email ticket | `--ticket-id`, `--message`, `--from-agent` (all required)                                                             |
+| Command         | Description                                                                                                                                                                                                | Options                                                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `list-tickets`  | List tickets                                                                                                                                                                                               | `--limit`, `--status`, `--search`, `--order-by`, `--cursor`, `--resume-token`, `--checkpoint-path`, `--updated-after`                |
+| `get-ticket`    | Get ticket details                                                                                                                                                                                         | `--id` (required)                                                                                                                    |
+| `get-tickets`   | Get details for up to 50 tickets in one paced, uncached read (per-ticket output matches `get-ticket`, plus `requested_id`); per-id outcomes in `metadata.not_found`/`failures`/`unattempted`/`stop_reason` | `--ids` (required, comma-separated, deduped), `--interval-ms` (500-5000, default 1000), `--budget-ms` (10000-240000, default 120000) |
+| `create-ticket` | Create a new ticket                                                                                                                                                                                        | `--customer-email`, `--subject`, `--message` (all required)                                                                          |
+| `add-message`   | Add an API-channel message to a non-email ticket                                                                                                                                                           | `--ticket-id`, `--message`, `--from-agent` (all required)                                                                            |
 
 ### Customer Commands
 

@@ -55,6 +55,7 @@ Run commands using: `npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- <comm
 |---------|-------------|---------|
 | `list-tickets` | List tickets | `--limit`, `--status`, `--search`, `--order-by`, `--cursor`, `--resume-token`, `--checkpoint-path`, `--updated-after` |
 | `get-ticket` | Get ticket details | `--id` (required) |
+| `get-tickets` | Get details for up to 50 tickets in one paced, uncached read (per-ticket output matches `get-ticket`, plus `requested_id`); per-id outcomes in `metadata.not_found`/`failures`/`unattempted`/`stop_reason` | `--ids` (required, comma-separated, deduped), `--interval-ms` (500-5000, default 1000), `--budget-ms` (10000-240000, default 120000) |
 | `create-ticket` | Create a new ticket | `--customer-email`, `--subject`, `--message` (all required) |
 | `add-message` | Add an API-channel message to a non-email ticket | `--ticket-id`, `--message`, `--from-agent` (all required) |
 

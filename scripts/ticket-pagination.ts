@@ -14,6 +14,7 @@ export interface FilteredTicketPaginationOptions {
   search?: string;
   orderBy?: string;
   cursor?: string;
+  customerId?: number;
   updatedAfter?: string;
   resumeToken?: string;
   maxPages?: number;
@@ -35,6 +36,7 @@ export interface FilteredTicketReadClient {
     limit: number;
     orderBy?: string;
     cursor?: string;
+    customerId?: number;
   }): Promise<ListResponse<Ticket>>;
 }
 
@@ -64,6 +66,7 @@ function filterDigest(options: FilteredTicketPaginationOptions, pageLimit: numbe
     status: options.status ?? null,
     search: options.search?.trim().toLowerCase() ?? null,
     orderBy: options.updatedAfter ? "updated_datetime:desc" : options.orderBy ?? null,
+    customerId: options.customerId ?? null,
     updatedAfter: options.updatedAfter ?? null,
     pageLimit,
   }));
@@ -181,6 +184,7 @@ export async function paginateFilteredTickets(
         limit: pageLimit,
         orderBy: options.updatedAfter ? "updated_datetime:desc" : options.orderBy,
         cursor: providerCursor ?? undefined,
+        ...(options.customerId !== undefined ? { customerId: options.customerId } : {}),
       });
     } catch (error) {
       const resumable = encodeResume({
@@ -235,9 +239,7 @@ export async function paginateFilteredTickets(
     let coverageComplete = false;
     let paginationTruncated = result.paginationTruncated;
 
-    if (crossedUpdatedWindow) {
-      coverageComplete = true;
-    } else if (stoppedInsidePage) {
+    if (stoppedInsidePage) {
       resumeToken = encodeResume({
         filterDigest: digest,
         providerCursor,
@@ -245,6 +247,8 @@ export async function paginateFilteredTickets(
         pageDigest: currentPageDigest,
       });
       hasMore = true;
+    } else if (crossedUpdatedWindow) {
+      coverageComplete = true;
     } else if (nextProviderCursor) {
       if (nextProviderCursor === providerCursor || seenCursors.has(nextProviderCursor)) {
         hasMore = true;

@@ -312,8 +312,9 @@ export function buildClassifierInput(ticket: Ticket): ClassifierInput {
   let truncated = allInbound.length > inbound.length || (ticket.subject ?? "").length > 1_000;
   const messages: ClassifierInput["messages"] = [];
   for (const message of inbound) {
-    const raw = message.stripped_text ?? message.body_text ?? stripHtml(message.body_html ?? "");
-    const normalized = normalizeText(raw);
+    const normalized = [message.stripped_text, message.body_text, stripHtml(message.body_html ?? "")]
+      .map((value) => normalizeText(value ?? ""))
+      .find((value) => value.length > 0) ?? "";
     const text = normalized.slice(0, Math.min(4_000, remaining));
     if (text.length < normalized.length) truncated = true;
     remaining -= text.length;
@@ -550,11 +551,4 @@ export function eligibleForAutomaticRestore(
     && decision.confidence >= options.minimumConfidence
     && decision.risk_flags.length === 0
     && !options.trashRestoreBlocked;
-}
-
-export function redactAuditText(value: string): string {
-  return value
-    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[email]")
-    .replace(/\b(?:\+?\d[\d ()-]{7,}\d)\b/g, "[phone]")
-    .slice(0, 300);
 }

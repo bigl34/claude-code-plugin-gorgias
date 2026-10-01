@@ -229,12 +229,6 @@ function sanitizedSnapshotFromMap(
   });
 }
 
-export function buildSanitizedIntegrationSnapshot(
-  customer: unknown,
-): Readonly<SanitizedCustomerIntegrationSnapshot> {
-  return sanitizedSnapshotFromMap(customer, integrationMap(customer));
-}
-
 function sourceOnlyPaths(
   source: CanonicalValue,
   target: CanonicalValue | undefined,

@@ -1,7 +1,19 @@
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { loadServiceConfig, z } from "@local/cli-utils";
+import { z } from "@local/cli-utils";
+import {
+  bizProviderPolicy,
+  generateOpenRouterText,
+  LlmEmptyResponseError,
+  LlmHttpError,
+  LlmMalformedResponseError,
+  LlmRateLimitError,
+  LlmTimeoutError,
+  LlmTruncatedError,
+  loadOpenRouterKey,
+  type OpenRouterUsageLogEntry,
+} from "./vendor/llm-utils/index.js";
 import {
   PROMPT_VERSION,
   REVIEW_SCHEMA_VERSION,
@@ -9,10 +21,6 @@ import {
   type ClassifierDecision,
   type ClassifierInput,
 } from "./spam-review-core.js";
-
-const GeminiConfigSchema = z.object({
-  gemini: z.object({ apiKey: z.string().min(1) }),
-});
 
 const RESPONSE_SCHEMA = {
   type: "object",
@@ -117,19 +125,6 @@ export interface GeminiClassifierOptions {
   usageLogger?: GeminiUsageLogger | null;
 }
 
-interface GeminiResponse {
-  candidates?: Array<{
-    content?: { parts?: Array<{ text?: string; thought?: boolean }> };
-    finishReason?: string;
-  }>;
-  usageMetadata?: {
-    promptTokenCount?: number;
-    candidatesTokenCount?: number;
-    thoughtsTokenCount?: number;
-    totalTokenCount?: number;
-  };
-}
-
 export class GeminiSpamClassifier {
   readonly model: string;
   private readonly apiKey: string;
@@ -142,27 +137,24 @@ export class GeminiSpamClassifier {
     if (options.apiKey) {
       this.apiKey = options.apiKey;
     } else {
-      const config = loadServiceConfig("gemini-deep-research", {
-        schema: GeminiConfigSchema,
-        remedy: "Run cred-loader-sync to regenerate Gemini credentials.",
-      });
-      this.apiKey = config.gemini.apiKey;
+      this.apiKey = loadOpenRouterKey();
     }
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? 45_000;
     this.usageLogger = options.usageLogger === undefined ? loadUsageLogger() : options.usageLogger;
   }
 
-  private logUsage(success: boolean, usage?: GeminiResponse["usageMetadata"]): void {
+  private logUsage(success: boolean, entry?: OpenRouterUsageLogEntry): void {
     if (!this.usageLogger) return;
     try {
+      const usage = entry?.usage;
       this.usageLogger.logGeminiUsage({
         ts: new Date().toISOString(),
-        model: this.model,
-        promptTokens: usage?.promptTokenCount ?? 0,
-        completionTokens: usage?.candidatesTokenCount ?? 0,
-        thinkingTokens: usage?.thoughtsTokenCount ?? 0,
-        totalTokens: usage?.totalTokenCount ?? 0,
+        model: entry?.servedModel ?? this.model,
+        promptTokens: usage?.promptTokens ?? 0,
+        completionTokens: usage?.completionTokens ?? 0,
+        thinkingTokens: usage?.reasoningTokens ?? 0,
+        totalTokens: usage?.totalTokens ?? 0,
         caller: "gorgias-spam-review",
         purpose: "spam-false-positive-classification",
         success,
@@ -172,62 +164,57 @@ export class GeminiSpamClassifier {
   }
 
   private async request(input: ClassifierInput, attempt: number): Promise<ClassifierDecision> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    let response: Response;
+    let usageEntry: OpenRouterUsageLogEntry | undefined;
+    let result: Awaited<ReturnType<typeof generateOpenRouterText>>;
     try {
-      response = await this.fetchImpl(
-        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "x-goog-api-key": this.apiKey,
-          },
-          signal: controller.signal,
-          body: JSON.stringify({
-            systemInstruction: { parts: [{ text: SYSTEM_PROMPT }] },
-            contents: [{
-              role: "user",
-              parts: [{
-                text: `${attempt > 0 ? "Previous output failed local schema validation. Return only schema-valid JSON.\n" : ""}Classify this one ticket:\n${JSON.stringify(input)}`,
-              }],
-            }],
-            generationConfig: {
-              maxOutputTokens: 4_096,
-              thinkingConfig: { thinkingLevel: "minimal" },
-              responseMimeType: "application/json",
-              responseSchema: RESPONSE_SCHEMA,
-            },
-          }),
+      result = await generateOpenRouterText({
+        model: this.model,
+        system: SYSTEM_PROMPT,
+        user: `${attempt > 0 ? "Previous output failed local schema validation. Return only schema-valid JSON.\n" : ""}Classify this one ticket:\n${JSON.stringify(input)}`,
+        maxOutputTokens: 4_096,
+        timeoutMs: this.timeoutMs,
+        jsonSchema: {
+          name: "gorgias_spam_review",
+          schema: RESPONSE_SCHEMA,
+          strict: true,
         },
-      );
+        reasoningEffort: "minimal",
+        title: "gorgias-spam-review",
+        provider: bizProviderPolicy(this.model),
+      }, {
+        fetchImpl: this.fetchImpl,
+        loadKey: () => this.apiKey,
+        maxAttempts: 1,
+        usageLogger: (entry) => {
+          usageEntry = entry;
+        },
+      });
     } catch (error) {
-      this.logUsage(false);
-      if (error instanceof Error && error.name === "AbortError") {
+      const errorUsage = getOpenRouterErrorUsage(error);
+      this.logUsage(false, errorUsage);
+      if (error instanceof LlmTimeoutError) {
         throw new Error(`Gemini spam classification timed out after ${this.timeoutMs}ms`);
       }
+      if (error instanceof LlmHttpError || error instanceof LlmRateLimitError) {
+        throw new Error(`Gemini spam classification failed (${error.status})`);
+      }
+      if (error instanceof LlmMalformedResponseError) {
+        throw new Error("Gemini spam classification returned invalid JSON");
+      }
+      if (error instanceof LlmTruncatedError) {
+        throw new Error(`Gemini spam classification returned incomplete output (${error.finishReason})`);
+      }
+      if (error instanceof LlmEmptyResponseError) {
+        throw new Error("Gemini spam classification returned no text");
+      }
       throw error;
-    } finally {
-      clearTimeout(timer);
     }
 
-    if (!response.ok) {
-      await response.text().catch(() => "");
-      this.logUsage(false);
-      throw new Error(`Gemini spam classification failed (${response.status})`);
-    }
-    const payload = await response.json() as GeminiResponse;
-    const usage = payload.usageMetadata;
     try {
-      const candidate = payload.candidates?.[0];
-      if (candidate?.finishReason && candidate.finishReason !== "STOP") {
-        throw new Error(`Gemini spam classification returned incomplete output (${candidate.finishReason})`);
+      if (result.finishReason && result.finishReason !== "stop") {
+        throw new Error(`Gemini spam classification returned incomplete output (${result.finishReason})`);
       }
-      const text = candidate?.content?.parts
-        ?.filter((part) => part.thought !== true && typeof part.text === "string")
-        .map((part) => part.text)
-        .join("");
+      const text = result.text;
       if (!text) throw new Error("Gemini spam classification returned no text");
       let parsed: unknown;
       try {
@@ -239,10 +226,10 @@ export class GeminiSpamClassifier {
       if (decision.ticket_id !== input.ticket_id) {
         throw new Error("Gemini spam classification returned the wrong ticket ID");
       }
-      this.logUsage(true, usage);
+      this.logUsage(true, usageEntry);
       return decision;
     } catch (error) {
-      this.logUsage(false, usage);
+      this.logUsage(false, usageEntry);
       throw error;
     }
   }
@@ -265,4 +252,14 @@ export class GeminiSpamClassifier {
       schemaVersion: REVIEW_SCHEMA_VERSION,
     };
   }
+}
+
+function getOpenRouterErrorUsage(error: unknown): OpenRouterUsageLogEntry | undefined {
+  if (error === null || typeof error !== "object") {
+    return undefined;
+  }
+  const candidate = error as {
+    openRouterUsage?: OpenRouterUsageLogEntry;
+  };
+  return candidate.openRouterUsage;
 }

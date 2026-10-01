@@ -8,6 +8,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmSync,
   statSync,
   unlinkSync,
   writeSync,
@@ -358,6 +359,10 @@ export function readRunSummary(stateRoot: string, runId: string): RunSummary {
 function alertPath(stateRoot: string, key: string): string {
   if (!/^[a-z0-9-]+$/.test(key)) throw new Error("invalid spam-review alert key");
   return join(resolve(stateRoot), "alerts", `${key}.json`);
+}
+
+export function clearDebouncedAlert(stateRoot: string, key: string): void {
+  rmSync(alertPath(stateRoot, key), { force: true });
 }
 
 export function shouldSendDebouncedAlert(
